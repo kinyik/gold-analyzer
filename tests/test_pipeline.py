@@ -44,6 +44,11 @@ def test_invented_prices_detected():
     assert ai_analyst.invented_prices("目标 4100", facts) == [4100.0]
 
 
+def test_trade_advice_detected():
+    assert ai_analyst.trade_advice_words("建议建立空头仓位，止损设在 2755") == ["仓位", "止损"]
+    assert ai_analyst.trade_advice_words("多周期偏空，上方阻力 2767") == []
+
+
 def test_alert_dedup_and_daily_cap(tmp_path, capsys):
     settings = replace(_settings(tmp_path), max_alerts_per_day=2)
     db = Database(settings.db_path)

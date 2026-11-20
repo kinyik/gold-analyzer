@@ -24,7 +24,8 @@ Python · MetaTrader5 · pandas · SQLite · Ollama · Streamlit · Plotly · AP
 ## 快速开始（Windows）
 1. 安装 [MT5](https://www.metatrader5.com/)，登录经纪商的**模拟账户**，在「市场报价」找到金价的确切品种名。
 2. 双击 `setup.bat`（建虚拟环境、装依赖、生成 `.env`）。
-3. 编辑 `.env`：填 `MT5_SYMBOL`；需要手机提醒就填 Telegram token 和 chat id。
+3. 编辑 `.env`：填 `MT5_SYMBOL`。需要手机提醒：把 @BotFather 给的 token 贴进 `TELEGRAM_BOT_TOKEN`，
+   在 Telegram 给机器人按 Start，再运行 `.venv\Scripts\python.exe telegram_setup.py`（自动填 chat id 并发测试消息）。
    没装 MT5 想先看效果：把 `DATA_SOURCE` 改成 `demo`。
 4. （可选）安装 [Ollama](https://ollama.com/) 后运行 `ollama pull qwen2.5:7b`。没装也能用，分析会改用文字模板。
 5. 双击 `start.bat`，浏览器会打开 http://localhost:8501 。
