@@ -21,7 +21,7 @@ API = "https://api.telegram.org/bot{token}/{method}"
 
 def call(token: str, method: str, **params) -> dict:
     try:
-        resp = requests.post(API.format(token=token, method=method), json=params, timeout=20)
+        resp = requests.post(API.format(token=token, method=method), json=params, timeout=45)
     except requests.RequestException as exc:
         sys.exit(f"连不上 Telegram（{exc.__class__.__name__}），请检查网络。")
     data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
@@ -30,6 +30,16 @@ def call(token: str, method: str, **params) -> dict:
             sys.exit("bot token 不对。请到 @BotFather 重新复制，贴进 .env 的 TELEGRAM_BOT_TOKEN。")
         sys.exit(f"Telegram 返回错误：{data.get('description', resp.status_code)}")
     return data["result"]
+
+
+def _private_chats(updates: list) -> dict:
+    chats = {}
+    for upd in updates:
+        msg = upd.get("message") or upd.get("my_chat_member") or {}
+        chat = msg.get("chat")
+        if chat and chat.get("type") == "private":
+            chats[chat["id"]] = chat.get("first_name") or chat.get("username") or ""
+    return chats
 
 
 def main() -> None:
@@ -42,13 +52,13 @@ def main() -> None:
     bot = call(token, "getMe")
     print(f"机器人：@{bot['username']}")
 
-    updates = call(token, "getUpdates", timeout=0)
-    chats = {}
-    for upd in updates:
-        msg = upd.get("message") or upd.get("my_chat_member") or {}
-        chat = msg.get("chat")
-        if chat and chat.get("type") == "private":
-            chats[chat["id"]] = chat.get("first_name") or chat.get("username") or ""
+    chats = _private_chats(call(token, "getUpdates", timeout=0))
+    if not chats:
+        print(f"等你在 Telegram 给 @{bot['username']} 发一句话（最多等 2 分钟）…")
+        for _ in range(4):
+            chats = _private_chats(call(token, "getUpdates", timeout=30))
+            if chats:
+                break
     if not chats:
         sys.exit(f"还没收到你的消息。请在 Telegram 打开 @{bot['username']}，按 Start 或发一句话，再运行一次。")
     chat_id, name = list(chats.items())[-1]
