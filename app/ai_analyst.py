@@ -1,6 +1,7 @@
 """把代码算好的数字交给本地 Ollama 写成中文分析。
 
-- AI 只能用我们给的数字；输出里出现没给过的价位，就当作编造，改用文字模板。
+- AI 只负责解读局面；交易计划和信号全部由代码算，接在 AI 文字后面（program_block）。
+- AI 只能用我们给的数字；输出里出现没给过的价位、或自己写交易建议，就改用文字模板。
 - Ollama 没开、太慢或出错，也改用文字模板，所以没装 AI 也能用。
 """
 from __future__ import annotations
@@ -27,7 +28,8 @@ PROMPT = """你是一名黄金（XAU/USD）技术分析助理。下面是程序�
 【失效条件】
 【风险提醒】
 3. 你只负责解读局面。绝对不要给出任何交易建议：不准写入场、开仓、仓位、止损、目标。
-   交易信号由程序另外显示，不用你写。【关键位】只列出数据里的支撑和阻力并说明意义。
+   交易计划由程序另外显示，不用你写。【关键位】照抄「关键位」里最近的一个阻力和一个支撑的句子，
+   不要改动来源和强度。
 4. 【风险提醒】最后一句固定写：仅供参考，不构成投资建议。
 
 数据：
@@ -43,16 +45,32 @@ def trade_advice_words(text: str) -> list[str]:
     return [w for w in TRADE_ADVICE_WORDS if w in text]
 
 
-def signal_line(facts: dict) -> str:
-    """由代码生成的信号说明，接在 AI 文字后面。"""
+def _dir_word(d: str) -> str:
+    return "做多" if d == "多" else "做空"
+
+
+def program_block(facts: dict) -> str:
+    """由代码生成的交易计划和信号，接在分析文字后面。"""
+    lines = [f"【程序判断】方向：{facts.get('bias', '-')}（H4 和 D1 同向才有方向，否则按震荡市处理）"]
     sig = facts.get("signal")
     if sig:
-        return (
-            f"【程序信号】{sig['direction']}：入场区 {sig['entry_low']:.2f}–{sig['entry_high']:.2f}，"
-            f"止损 {sig['stop']:.2f}，目标 {sig['target']:.2f}（{sig['rr']}R）。"
+        lines.append(
+            f"【程序信号】{_dir_word(sig['direction'])}：进场参考 {sig['entry_low']:.2f}–{sig['entry_high']:.2f}，"
+            f"止损 {sig['stop']:.2f}，目标 {sig['target']:.2f}（{sig['rr']:.0f}R）。根据：" + "；".join(sig["reasons"])
         )
-    notes = "；".join(facts.get("strategy_notes") or ["条件未满足"])
-    return f"【程序信号】暂无信号：{notes}。"
+    else:
+        notes = "；".join(dict.fromkeys(facts.get("strategy_notes") or ["条件未满足"]))
+        lines.append(f"【程序信号】暂无：{notes}。")
+    for i, p in enumerate(facts.get("plan") or [], 1):
+        lines.append(
+            f"【计划 {i}：{_dir_word(p['direction'])}】关注 {p['zone_low']:.2f}–{p['zone_high']:.2f}"
+            f"（离现价 {p['distance_atr']} 个 ATR）。触发：{p['trigger']}。"
+            f"参考止损 {p['stop']:.2f}，目标 {p['target']:.2f}。根据：" + "；".join(p["basis"])
+            + f"。作废：{p['invalidation']}。"
+        )
+    if not facts.get("plan"):
+        lines.append("【计划】附近没有合格的关键位，先观望。")
+    return "\n".join(lines)
 
 
 def _collect_numbers(obj, out: list[float]) -> None:
@@ -89,38 +107,46 @@ def invented_prices(text: str, facts: dict, min_value: float = 500.0, tol: float
     return bad
 
 
+def _zone_text(zones: list[dict]) -> str:
+    if not zones:
+        return "暂无"
+    return "、".join(f"{z['price']:.2f}（{'+'.join(z['sources'])}，强度 {z['score']}）" for z in zones[:3])
+
+
 def template_analysis(facts: dict) -> str:
     trends = facts["trends"]
     h1 = facts["indicators"]["H1"]
-    lv = facts["levels"]["H1"]
-    sup = "、".join(f"{x['price']:.2f}" for x in lv["supports"]) or "暂无"
-    res = "、".join(f"{x['price']:.2f}" for x in lv["resistances"]) or "暂无"
+    zones = facts.get("zones", {})
     trend_txt = "，".join(f"{tf} {t}" for tf, t in trends.items())
-    sig = facts.get("signal")
-    if sig:
-        key = (
-            f"信号：{sig['direction']}，入场区 {sig['entry_low']:.2f}–{sig['entry_high']:.2f}，"
-            f"止损 {sig['stop']:.2f}，目标 {sig['target']:.2f}（{sig['rr']}R）。"
-        )
-        invalid = f"价格{'跌破' if sig['direction'] == '多' else '升破'} {sig['stop']:.2f} 信号作废。"
-    else:
-        key = "暂无信号：" + "；".join(facts.get("strategy_notes") or ["条件未满足"]) + "。"
-        invalid = "等待 H4 和 H1 方向一致且价格回到关键位附近。"
     rsi = h1.get("rsi14")
-    rsi_note = "超买" if rsi and rsi > 70 else "超卖" if rsi and rsi < 30 else "中性"
+    rsi_note = "超买" if rsi and rsi >= 70 else "超卖" if rsi and rsi <= 30 else "中性"
     return (
         f"【局面】现价 {facts['price']:.2f}，{trend_txt}。\n"
         f"【理由】H1 EMA20 {h1.get('ema20')}，EMA50 {h1.get('ema50')}，EMA200 {h1.get('ema200')}；"
         f"RSI {rsi}（{rsi_note}），MACD 柱 {h1.get('macd_hist')}，ATR {h1.get('atr14')}。\n"
-        f"【关键位】上方阻力 {res}；下方支撑 {sup}。{key}\n"
-        f"【失效条件】{invalid}\n"
-        "【风险提醒】非农、CPI、美联储公布前后波动大，指标容易失灵。仅供参考，不构成投资建议。"
+        f"【关键位】上方阻力 {_zone_text(zones.get('resistances', []))}；"
+        f"下方支撑 {_zone_text(zones.get('supports', []))}。\n"
+        "【失效条件】见下方各计划的「作废」条件。\n"
+        "【风险提醒】非农、CPI、美联储公布前后波动大，关键位容易被瞬间击穿。仅供参考，不构成投资建议。\n"
+        + program_block(facts)
     )
 
 
-def _with_labels(facts: dict) -> dict:
-    """小模型比较数字容易出错，先由代码把每个周期的状态写成文字。"""
+def _zone_sentence(z: dict) -> str:
+    return f"{z['price']:.2f}：由{'、'.join(z['sources'])}组成，强度 {z['score']}"
+
+
+def _for_ai(facts: dict) -> dict:
+    """给 AI 的数据：去掉交易计划和信号（那部分由代码写），并把状态先写成文字。"""
     out = copy.deepcopy(facts)
+    for key in ("plan", "signal", "strategy_notes"):
+        out.pop(key, None)
+    # 小模型读嵌套 JSON 容易张冠李戴，关键位直接写成句子
+    zones = out.pop("zones", {})
+    out["关键位"] = {
+        "上方阻力": [_zone_sentence(z) for z in zones.get("resistances", [])[:3]],
+        "下方支撑": [_zone_sentence(z) for z in zones.get("supports", [])[:3]],
+    }
     for ind in out.get("indicators", {}).values():
         rsi = ind.get("rsi14")
         if rsi is not None:
@@ -128,17 +154,12 @@ def _with_labels(facts: dict) -> dict:
         hist = ind.get("macd_hist")
         if hist is not None:
             ind["macd状态"] = "多头动能" if hist > 0 else "空头动能"
-    source_names = {"swing": "前高前低", "round": "整数关口", "swing+round": "前高前低+整数关口"}
-    for tf_levels in out.get("levels", {}).values():
-        for group in tf_levels.values():
-            for lv in group:
-                lv["source"] = source_names.get(lv.get("source"), lv.get("source"))
     return out
 
 
 def analyze(facts: dict, settings: Settings) -> tuple[str, str]:
     """返回 (分析文字, 来源 'ollama' 或 'template')。"""
-    prompt = PROMPT.format(facts=json.dumps(_with_labels(facts), ensure_ascii=False, indent=1))
+    prompt = PROMPT.format(facts=json.dumps(_for_ai(facts), ensure_ascii=False, indent=1))
     try:
         resp = requests.post(
             f"{settings.ollama_url.rstrip('/')}/api/generate",
@@ -170,4 +191,4 @@ def analyze(facts: dict, settings: Settings) -> tuple[str, str]:
     if advice:
         log.warning("AI 自己写了交易建议（%s），改用文字模板", "、".join(advice))
         return template_analysis(facts), "template"
-    return f"{text}\n{signal_line(facts)}", "ollama"
+    return f"{text}\n{program_block(facts)}", "ollama"

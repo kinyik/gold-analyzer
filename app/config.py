@@ -44,6 +44,10 @@ class Settings:
     mt5_utc_offset_hours: float | None = field(
         default_factory=lambda: _optional_float("MT5_SERVER_UTC_OFFSET_HOURS")
     )
+    # 自动判断失败（例如周末休市）时用这个；大多数 MT5 经纪商是 UTC+2（夏令时 +3）
+    mt5_utc_offset_fallback: float = field(
+        default_factory=lambda: _float("MT5_SERVER_UTC_OFFSET_FALLBACK", 2)
+    )
 
     telegram_bot_token: str = field(default_factory=lambda: _str("TELEGRAM_BOT_TOKEN"))
     telegram_chat_id: str = field(default_factory=lambda: _str("TELEGRAM_CHAT_ID"))

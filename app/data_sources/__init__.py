@@ -16,6 +16,7 @@ def build_source(settings: Settings) -> DataSource:
             symbol=settings.mt5_symbol,
             path=settings.mt5_path or None,
             utc_offset_hours=settings.mt5_utc_offset_hours,
+            fallback_offset_hours=settings.mt5_utc_offset_fallback,
         )
     raise ValueError(f"未知的 DATA_SOURCE：{settings.data_source}（可选 mt5 或 demo）")
 

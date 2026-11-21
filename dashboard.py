@@ -11,7 +11,6 @@ import streamlit as st
 from app.config import TIMEFRAMES, get_settings
 from app.db import Database
 from app.indicators import add_indicators
-from app.levels import find_levels
 
 st.set_page_config(page_title="XAU/USD 金价分析", page_icon="🥇", layout="wide")
 settings = get_settings()
@@ -24,7 +23,7 @@ def get_db() -> Database:
     return Database(settings.db_path)
 
 
-def chart(df: pd.DataFrame, levels: dict, tf: str) -> go.Figure:
+def chart(df: pd.DataFrame, zones: dict, plan: list, tf: str) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
@@ -32,12 +31,19 @@ def chart(df: pd.DataFrame, levels: dict, tf: str) -> go.Figure:
     ))
     for col, color in (("ema20", "#ffca28"), ("ema50", "#42a5f5"), ("ema200", "#ab47bc")):
         fig.add_trace(go.Scatter(x=df.index, y=df[col], name=col.upper(), line=dict(width=1.3, color=color)))
-    for lv in levels["supports"]:
-        fig.add_hline(y=lv.price, line=dict(color="#26a69a", dash="dot", width=1),
-                      annotation_text=f"支撑 {lv.price:.2f}", annotation_position="right")
-    for lv in levels["resistances"]:
-        fig.add_hline(y=lv.price, line=dict(color="#ef5350", dash="dot", width=1),
-                      annotation_text=f"阻力 {lv.price:.2f}", annotation_position="right")
+    lo, hi = df["low"].min(), df["high"].max()
+    for key, color, word in (("supports", "#26a69a", "支撑"), ("resistances", "#ef5350", "阻力")):
+        for z in zones.get(key, []):
+            if not lo - (hi - lo) * 0.2 <= z["price"] <= hi + (hi - lo) * 0.2:
+                continue
+            fig.add_hline(y=z["price"], line=dict(color=color, dash="dot", width=1 + 0.5 * z["score"]),
+                          annotation_text=f"{word} {z['price']:.2f}（强度{z['score']}）",
+                          annotation_position="right")
+    for p in plan:
+        color = "rgba(38,166,154,0.18)" if p["direction"] == "多" else "rgba(239,83,80,0.18)"
+        fig.add_hrect(y0=p["zone_low"], y1=p["zone_high"], fillcolor=color, line_width=0,
+                      annotation_text="做多计划区" if p["direction"] == "多" else "做空计划区",
+                      annotation_position="left")
     fig.update_layout(
         template="plotly_dark", height=560, margin=dict(l=10, r=10, t=30, b=10),
         xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.04),
@@ -98,18 +104,39 @@ def live() -> None:
             st.warning(f"没有 {tf} 的 K 线数据")
         else:
             df = add_indicators(raw)
-            last_atr = float(df["atr14"].iloc[-1]) if pd.notna(df["atr14"].iloc[-1]) else 0.0
-            levels = find_levels(df, price, last_atr, round_step=settings.round_level_step)
-            st.plotly_chart(chart(df.tail(bars), levels, tf), use_container_width=True)
+            st.plotly_chart(chart(df.tail(bars), payload.get("zones", {}), payload.get("plan", []), tf),
+                            use_container_width=True)
     with right:
         source = "本地 AI（Ollama）" if analysis["ai_source"] == "ollama" else "文字模板"
         st.subheader("最新分析")
         st.caption(f"{analysis['time'][:16].replace('T', ' ')} UTC · {source}")
-        st.markdown(analysis["ai_text"].replace("\n", "  \n"))
-        sig = payload.get("signal")
-        if sig:
-            st.success(f"信号：{sig['direction']}　入场 {sig['entry_low']}–{sig['entry_high']}　"
-                       f"止损 {sig['stop']}　目标 {sig['target']}")
+        text = analysis["ai_text"].split("【程序判断】")[0]
+        st.markdown(text.replace("\n", "  \n"))
+
+    st.subheader(f"交易计划　·　方向：{payload.get('bias', '-')}")
+    sig = payload.get("signal")
+    if sig:
+        st.success(
+            f"**信号：{'做多' if sig['direction'] == '多' else '做空'}**　进场 {sig['entry_low']}–{sig['entry_high']}　"
+            f"止损 {sig['stop']}　目标 {sig['target']}（{sig['rr']:.0f}R）  \n根据：" + "；".join(sig["reasons"])
+        )
+    else:
+        notes = "；".join(dict.fromkeys(payload.get("strategy_notes") or [])) or "条件未满足"
+        st.caption(f"暂无信号：{notes}")
+    plan = payload.get("plan", [])
+    if not plan:
+        st.caption("附近没有合格的关键位，先观望。")
+    for p in plan:
+        is_long = p["direction"] == "多"
+        with st.container(border=True):
+            st.markdown(
+                f"**{'🟢 做多' if is_long else '🔴 做空'}计划区 {p['zone_low']:.2f}–{p['zone_high']:.2f}**"
+                f"　离现价 {p['distance_atr']} ATR　强度 {p['score']}  \n"
+                f"触发：{p['trigger']}  \n"
+                f"参考止损 **{p['stop']:.2f}**　目标 **{p['target']:.2f}**（{p['rr']:.0f}R）  \n"
+                "根据：" + "；".join(p["basis"]) + f"  \n作废：{p['invalidation']}"
+            )
+    st.caption("计划由程序按固定规则计算，回测结果见 STRATEGY.md。仅供学习和研究，不构成投资建议。")
 
     st.subheader("信号记录")
     signals = db.recent_signals(50)

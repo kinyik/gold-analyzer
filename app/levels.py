@@ -1,86 +1,118 @@
-"""自动支撑阻力：前高前低（swing high/low）聚类 + 整数关口。"""
+"""关键位：把前高前低、昨日高低点、整数关口、重要均线合并成「区」，
+重叠的来源越多，区越强（共振）。"""
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
+SWING_LABELS = ("前高", "前低")
+
 
 @dataclass
-class Level:
+class Zone:
     price: float
-    kind: str  # "support" 或 "resistance"
-    source: str  # "swing"、"round" 或 "swing+round"
-    touches: int = 1
+    low: float
+    high: float
+    sources: list[str] = field(default_factory=list)
+    touches: int = 0  # 前高前低在这里出现过几次
+
+    @property
+    def score(self) -> int:
+        """强度 = 不同来源的数量；同一价位被测试 2 次以上再加 1。"""
+        return len(set(self.sources)) + (1 if self.touches >= 2 else 0)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {
+            "price": round(self.price, 2),
+            "low": round(self.low, 2),
+            "high": round(self.high, 2),
+            "sources": self.sources,
+            "touches": self.touches,
+            "score": self.score,
+        }
 
 
 def swing_points(df: pd.DataFrame, window: int = 3) -> tuple[list[float], list[float]]:
     """某根 K 线的高点是前后各 window 根里最高的，就算前高；低点同理。
     最后 window 根还没被确认，不算。"""
-    highs, lows = df["high"].to_numpy(), df["low"].to_numpy()
-    swing_highs, swing_lows = [], []
-    for i in range(window, len(df) - window):
-        seg_h = highs[i - window : i + window + 1]
-        seg_l = lows[i - window : i + window + 1]
-        if highs[i] == seg_h.max() and np.argmax(seg_h) == window:
-            swing_highs.append(float(highs[i]))
-        if lows[i] == seg_l.min() and np.argmin(seg_l) == window:
-            swing_lows.append(float(lows[i]))
-    return swing_highs, swing_lows
+    highs, lows = swing_flags(df["high"].to_numpy(), df["low"].to_numpy(), window)
+    return (
+        [float(x) for x in df["high"].to_numpy()[highs]],
+        [float(x) for x in df["low"].to_numpy()[lows]],
+    )
 
 
-def _cluster(prices: list[float], tolerance: float) -> list[tuple[float, int]]:
-    """把彼此距离小于 tolerance 的价位合并成一个，返回 (平均价, 碰触次数)。"""
-    if not prices:
-        return []
-    prices = sorted(prices)
-    clusters: list[list[float]] = [[prices[0]]]
-    for p in prices[1:]:
-        if p - clusters[-1][-1] <= tolerance:
-            clusters[-1].append(p)
-        else:
-            clusters.append([p])
-    return [(float(np.mean(c)), len(c)) for c in clusters]
+def swing_flags(high: np.ndarray, low: np.ndarray, window: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """返回布尔数组：第 j 根是否前高 / 前低（要到第 j+window 根收盘后才确认）。"""
+    n = len(high)
+    is_high = np.zeros(n, dtype=bool)
+    is_low = np.zeros(n, dtype=bool)
+    for i in range(window, n - window):
+        seg_h = high[i - window : i + window + 1]
+        seg_l = low[i - window : i + window + 1]
+        is_high[i] = np.argmax(seg_h) == window
+        is_low[i] = np.argmin(seg_l) == window
+    return is_high, is_low
 
 
-def find_levels(
-    df: pd.DataFrame,
+def collect_candidates(
     price: float,
-    atr_value: float,
-    window: int = 3,
-    lookback: int = 300,
+    atr: float,
+    swing_highs: list[float],
+    swing_lows: list[float],
     round_step: float = 50.0,
-    max_each: int = 3,
-) -> dict[str, list[Level]]:
-    recent = df.tail(lookback)
-    tolerance = max(atr_value * 0.5, 1e-9)
-    highs, lows = swing_points(recent, window)
-    clusters = _cluster(highs + lows, tolerance)
-
-    levels: list[Level] = []
-    for lvl, touches in clusters:
-        kind = "support" if lvl < price else "resistance"
-        levels.append(Level(round(lvl, 2), kind, "swing", touches))
-
-    # 整数关口：价格上下各两个
+    prev_day_high: float | None = None,
+    prev_day_low: float | None = None,
+    extras: dict[str, float | None] | None = None,
+    span_atr: float = 10.0,
+) -> list[tuple[float, str]]:
+    span = span_atr * atr
+    out: list[tuple[float, str]] = []
+    out += [(p, "前高") for p in swing_highs if abs(p - price) <= span]
+    out += [(p, "前低") for p in swing_lows if abs(p - price) <= span]
     if round_step > 0:
-        base = math.floor(price / round_step) * round_step
-        for r in (base - round_step, base, base + round_step, base + 2 * round_step):
-            if abs(r - price) < 1e-9:
-                continue
-            near = [lv for lv in levels if abs(lv.price - r) <= tolerance]
-            if near:
-                for lv in near:
-                    lv.source = "swing+round"
-            else:
-                kind = "support" if r < price else "resistance"
-                levels.append(Level(round(r, 2), kind, "round", 0))
+        k = math.floor((price - span) / round_step)
+        while k * round_step <= price + span:
+            out.append((k * round_step, "整数关口"))
+            k += 1
+    if prev_day_high is not None:
+        out.append((prev_day_high, "昨日高点"))
+    if prev_day_low is not None:
+        out.append((prev_day_low, "昨日低点"))
+    for name, val in (extras or {}).items():
+        if val is not None and not np.isnan(val) and abs(val - price) <= span:
+            out.append((float(val), name))
+    return out
 
-    supports = sorted((lv for lv in levels if lv.kind == "support"), key=lambda lv: -lv.price)
-    resistances = sorted((lv for lv in levels if lv.kind == "resistance"), key=lambda lv: lv.price)
-    return {"supports": supports[:max_each], "resistances": resistances[:max_each]}
+
+def build_zones(candidates: list[tuple[float, str]], atr: float, merge_atr: float = 0.35) -> list[Zone]:
+    """相距不到 merge_atr 个 ATR 的价位合并成一个区。"""
+    if not candidates or atr <= 0:
+        return []
+    tol = merge_atr * atr
+    pad = 0.1 * atr
+    items = sorted(candidates, key=lambda x: x[0])
+    groups: list[list[tuple[float, str]]] = [[items[0]]]
+    for p, s in items[1:]:
+        if p - groups[-1][0][0] <= tol:
+            groups[-1].append((p, s))
+        else:
+            groups.append([(p, s)])
+    zones = []
+    for g in groups:
+        prices = [p for p, _ in g]
+        sources = list(dict.fromkeys(s for _, s in g))
+        touches = sum(1 for _, s in g if s in SWING_LABELS)
+        zones.append(Zone(float(np.mean(prices)), min(prices) - pad, max(prices) + pad, sources, touches))
+    return zones
+
+
+def split_zones(zones: list[Zone], price: float, min_score: int = 1, limit: int = 4) -> dict[str, list[Zone]]:
+    """价格下方的区当支撑（近的在前），上方的当阻力。"""
+    strong = [z for z in zones if z.score >= min_score]
+    supports = sorted((z for z in strong if z.price < price), key=lambda z: -z.price)
+    resistances = sorted((z for z in strong if z.price >= price), key=lambda z: z.price)
+    return {"supports": supports[:limit], "resistances": resistances[:limit]}

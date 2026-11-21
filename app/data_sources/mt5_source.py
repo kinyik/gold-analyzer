@@ -37,6 +37,7 @@ class MT5Source(DataSource):
         symbol: str,
         path: str | None = None,
         utc_offset_hours: float | None = None,
+        fallback_offset_hours: float = 2.0,
         max_retries: int = 5,
         retry_delay_sec: float = 3.0,
     ) -> None:
@@ -45,7 +46,9 @@ class MT5Source(DataSource):
         self.max_retries = max_retries
         self.retry_delay_sec = retry_delay_sec
         self._fixed_offset = utc_offset_hours is not None
-        self._offset_sec = int((utc_offset_hours or 0) * 3600)
+        self._fallback_hours = fallback_offset_hours
+        initial = utc_offset_hours if utc_offset_hours is not None else fallback_offset_hours
+        self._offset_sec = int(initial * 3600)
         self._offset_known = self._fixed_offset
         self._connected = False
 
@@ -119,8 +122,8 @@ class MT5Source(DataSource):
             self._offset_known = True
         elif not self._offset_known:
             log.warning(
-                "暂时判断不出服务器时区（可能休市），先当作 UTC。"
-                "可在 .env 设置 MT5_SERVER_UTC_OFFSET_HOURS（例如 2 或 3）。"
+                "暂时判断不出服务器时区（可能休市），先当作 UTC%+g。"
+                "不对的话可在 .env 设置 MT5_SERVER_UTC_OFFSET_HOURS。", self._fallback_hours
             )
 
     def _to_utc(self, server_epoch: float) -> datetime:

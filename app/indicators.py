@@ -76,22 +76,23 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def classify_trend(df: pd.DataFrame) -> str:
-    """看最后一根 K 线：
+def trend_series(df: pd.DataFrame) -> pd.Series:
+    """每根 K 线的趋势：
     - 多：收盘 > EMA50，且 EMA20 > EMA50 > EMA200（EMA200 算不出来时只看前两个条件）
     - 空：收盘 < EMA50，且 EMA20 < EMA50 < EMA200
     - 其他都算「震荡」
     """
-    last = df.iloc[-1]
-    close, e20, e50, e200 = last["close"], last["ema20"], last["ema50"], last.get("ema200")
-    if pd.isna(e20) or pd.isna(e50):
-        return "震荡"
-    has_200 = e200 is not None and not pd.isna(e200)
-    if close > e50 and e20 > e50 and (not has_200 or e50 > e200):
-        return "多"
-    if close < e50 and e20 < e50 and (not has_200 or e50 < e200):
-        return "空"
-    return "震荡"
+    close, e20, e50, e200 = df["close"], df["ema20"], df["ema50"], df["ema200"]
+    no_200 = e200.isna()
+    up = (close > e50) & (e20 > e50) & (no_200 | (e50 > e200))
+    down = (close < e50) & (e20 < e50) & (no_200 | (e50 < e200))
+    valid = e20.notna() & e50.notna()
+    out = np.where(valid & up, "多", np.where(valid & down, "空", "震荡"))
+    return pd.Series(out, index=df.index)
+
+
+def classify_trend(df: pd.DataFrame) -> str:
+    return str(trend_series(df.tail(1)).iloc[-1])
 
 
 def latest_values(df: pd.DataFrame) -> dict:
