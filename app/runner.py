@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import ai_analyst, strategy
+from app import ai_analyst, messages, strategy
 from app.alerts import Alerter
 from app.config import TIMEFRAMES, Settings, get_settings
 from app.data_sources import DataSource, build_source
@@ -79,6 +79,20 @@ class Runner:
         self.prev_trends: dict[str, str] = {}
         self.plan: list[dict] = []
         self.h1_atr: float | None = None
+        self.market_open: bool | None = None
+        self.last_facts: dict | None = None
+
+    def _check_market(self, tick_time: datetime) -> bool:
+        """报价太久没更新 = 休市。状态改变时记一笔日志。"""
+        age_min = (datetime.now(timezone.utc) - tick_time).total_seconds() / 60
+        is_open = age_min <= self.settings.market_stale_min
+        if is_open != self.market_open:
+            if is_open:
+                log.info("市场开盘中，提醒已启用")
+            else:
+                log.info("最新报价已是 %.0f 分钟前（休市），暂停所有提醒", age_min)
+        self.market_open = is_open
+        return is_open
 
     # ---------- 每几秒：报价 + 计划区提醒 ----------
     def tick_job(self) -> None:
@@ -88,18 +102,15 @@ class Runner:
             log.warning("取报价失败：%s", exc)
             return
         self.db.save_tick(tick.time, tick.bid, tick.ask)
-        if not self.h1_atr:
+        if not self._check_market(tick.time) or not self.h1_atr:
             return
         pad = 0.2 * self.h1_atr
         for item in self.plan:
-            if item["zone_low"] - pad <= tick.mid <= item["zone_high"] + pad:
-                word = "做多" if item["direction"] == "多" else "做空"
+            if item["zone_low"] - pad <= tick.mid <= item["zone_high"] + pad and self.last_facts:
+                facts = {**self.last_facts, "price": round(tick.mid, 2), "bid": tick.bid, "ask": tick.ask}
                 self.alerter.send(
                     f"plan:{item['direction']}:{item['zone_price']:.0f}",
-                    f"📍 XAU/USD {tick.mid:.2f} 进入{word}计划区 {item['zone_low']:.2f}–{item['zone_high']:.2f}\n"
-                    f"等待：{item['trigger']}\n"
-                    f"参考止损 {item['stop']:.2f}　目标 {item['target']:.2f}\n"
-                    "根据：" + "；".join(item["basis"][:2]),
+                    messages.plan_zone_message(facts, item, tick.mid),
                 )
 
     # ---------- 每 15 分钟：完整分析 ----------
@@ -154,7 +165,9 @@ class Runner:
 
         self.plan = facts["plan"]
         self.h1_atr = ctx.atr
-        self._alerts_after_analysis(facts, result)
+        self.last_facts = facts
+        if self._check_market(tick.time):
+            self._alerts_after_analysis(facts, result)
         self.prev_trends = trends
         return facts
 
@@ -163,23 +176,15 @@ class Runner:
         sig = result.signal
         if sig and not self.db.has_similar_open_signal(sig.direction, sig.entry, (self.h1_atr or 1) * 0.5):
             self.db.save_signal(sig.to_dict())
-            self.alerter.send(
-                f"signal:{sig.direction}:{round(sig.entry)}",
-                f"🔔 XAU/USD 新信号：{'做多' if sig.direction == '多' else '做空'}\n"
-                f"进场参考 {sig.entry_low:.2f}–{sig.entry_high:.2f}\n"
-                f"止损 {sig.stop:.2f}　目标 {sig.target:.2f}（{sig.rr:.0f}R）\n"
-                "根据：\n- " + "\n- ".join(sig.reasons),
-            )
+            self.alerter.send(f"signal:{sig.direction}:{round(sig.entry)}", messages.signal_message(facts))
         for tf in ("H1", "H4", "D1"):
             old, new = self.prev_trends.get(tf), facts["trends"][tf]
             if old and old != new:
-                self.alerter.send(
-                    f"trend:{tf}:{new}", f"↪ XAU/USD {tf} 趋势转向：{old} → {new}（现价 {price:.2f}）"
-                )
+                self.alerter.send(f"trend:{tf}:{new}", messages.trend_message(facts, tf, old, new))
         rsi = facts["indicators"]["H1"]["rsi14"]
         if rsi is not None and (rsi >= 70 or rsi <= 30):
             state = "超买" if rsi >= 70 else "超卖"
-            self.alerter.send(f"rsi:H1:{state}", f"⚠ XAU/USD H1 RSI {rsi:.1f}，{state}（现价 {price:.2f}）")
+            self.alerter.send(f"rsi:H1:{state}", messages.rsi_message(facts, state))
 
 
 def main() -> None:

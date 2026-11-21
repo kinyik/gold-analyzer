@@ -1,9 +1,11 @@
 """用演示数据源跑一遍完整流程（不需要 MT5、Ollama、Telegram）。"""
 from dataclasses import replace
+from datetime import timedelta
 
 from app import ai_analyst
 from app.alerts import Alerter
 from app.config import Settings
+from app.data_sources.base import Tick
 from app.data_sources.demo_source import DemoSource
 from app.db import Database
 from app.runner import Runner
@@ -35,6 +37,50 @@ def test_full_analysis_with_demo(tmp_path):
     assert analysis["ai_source"] == "template"
     assert "【局面】" in analysis["ai_text"]
     assert not db.load_candles("H1").empty
+    db.close()
+
+
+class _ClosedMarketSource(DemoSource):
+    """报价停在两天前，模拟周末休市。"""
+
+    def get_tick(self):
+        tick = super().get_tick()
+        return Tick(time=tick.time - timedelta(days=2), bid=tick.bid, ask=tick.ask)
+
+
+def test_no_alerts_when_market_closed(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    db = Database(settings.db_path)
+    source = _ClosedMarketSource(history_days=120)
+    source.connect()
+    runner = Runner(settings, source, db)
+    sent = []
+    monkeypatch.setattr(runner.alerter, "send", lambda key, text: sent.append(key))
+    runner.prev_trends = {"H1": "?", "H4": "?", "D1": "?"}  # 保证「趋势转向」会触发
+    runner.plan = [{"direction": "多", "zone_low": 0, "zone_high": 1e9, "zone_price": 1.0,
+                    "trigger": "", "stop": 0, "target": 0, "basis": []}]
+    runner.h1_atr = 5.0
+
+    assert runner.analysis_job() is not None  # 照样分析、存档
+    runner.tick_job()
+    assert runner.market_open is False
+    assert sent == []
+    assert db.latest_analysis() is not None
+    db.close()
+
+
+def test_alerts_sent_when_market_open(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    db = Database(settings.db_path)
+    source = DemoSource(history_days=120)
+    source.connect()
+    runner = Runner(settings, source, db)
+    sent = []
+    monkeypatch.setattr(runner.alerter, "send", lambda key, text: sent.append(key))
+    runner.prev_trends = {"H1": "?", "H4": "?", "D1": "?"}
+    runner.analysis_job()
+    assert runner.market_open is True
+    assert any(k.startswith("trend:") for k in sent)
     db.close()
 
 

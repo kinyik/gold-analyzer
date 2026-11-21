@@ -30,7 +30,7 @@ class Alerter:
             log.info("今天的提醒已达上限 %d 条，跳过：%s", self.settings.max_alerts_per_day, key)
             return False
 
-        message = f"{text}\n\n{DISCLAIMER}"
+        message = text if "不构成投资建议" in text else f"{text}\n\n{DISCLAIMER}"
         delivered = self._deliver(message)
         self.db.record_alert(key, message, delivered)
         return True
