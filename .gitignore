@@ -8,3 +8,6 @@ data/
 *.db-wal
 *.db-shm
 logs/
+
+# 原始录屏（含私人画面），不上传
+docs/屏幕录制*

@@ -6,11 +6,11 @@
 生成交易计划，用**本地开源大模型**写中文市场解读，并通过 Telegram 推送提醒。
 全部工具免费、开源，运行在本机，没有任何付费 API。
 
-![仪表板：实时价格、多周期趋势、K 线与关键位、本地 AI 解读](docs/screenshots/dashboard.png)
+![Demo：实时仪表板 → Telegram 自动提醒](docs/screenshots/demo.gif)
 
-<!-- Demo 影片：上传后取消注释
-🎬 Demo 影片：https://你的影片链接
--->
+🎬 完整 Demo 影片（49 秒）：[docs/demo.mp4](docs/demo.mp4)
+
+![仪表板：实时价格、多周期趋势、K 线与关键位、本地 AI 解读](docs/screenshots/dashboard.png)
 
 ## 解决什么问题
 
@@ -45,6 +45,8 @@ flowchart LR
 - **AI 中文解读**：每 15 分钟一次，本地运行、不联网、不收费
 - **Telegram 提醒**：新信号、进入计划区、趋势转向、RSI 超买超卖；附带行情、关键位、策略倾向和回测成绩；
   同一提醒 1 小时内不重复、每天有上限、休市时自动暂停
+
+  <img src="docs/screenshots/telegram.png" alt="Telegram 提醒示例" width="480">
 - **历史回测**：用实时分析的同一份策略代码重放 8.5 年 H1 数据，含样本内 / 样本外检验
 
 ## 几个关键设计决定

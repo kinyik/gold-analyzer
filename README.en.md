@@ -7,11 +7,11 @@ builds a trading plan from a rule set **backtested on 8.5 years of data**, write
 summary with a **local open-source LLM**, and pushes alerts to Telegram.
 Everything is free and open source and runs on your own PC. It uses no paid APIs.
 
-![Dashboard: live price, multi-timeframe trend, candles with key levels, local AI summary](docs/screenshots/dashboard.png)
+![Demo: live dashboard → automatic Telegram alert](docs/screenshots/demo.gif)
 
-<!-- Demo video: uncomment after uploading
-🎬 Demo video: https://your-video-link
--->
+🎬 Full demo video (49 s): [docs/demo.mp4](docs/demo.mp4)
+
+![Dashboard: live price, multi-timeframe trend, candles with key levels, local AI summary](docs/screenshots/dashboard.png)
 
 ## The problem
 
@@ -50,6 +50,8 @@ flowchart LR
 - **Telegram alerts** for new signals, price entering a plan zone, trend changes and RSI extremes. Each alert
   includes a market snapshot, key levels, the strategy's rule-based lean and its backtest record. The same alert
   is not repeated within an hour, there is a daily cap, and alerts pause automatically while the market is closed
+
+  <img src="docs/screenshots/telegram.png" alt="Telegram alert example (in Chinese)" width="480">
 - **Backtester** that replays 8.5 years of H1 data through the same strategy code the live system runs, with an
   in-sample / out-of-sample check
 
