@@ -1,6 +1,6 @@
 """用演示数据源跑一遍完整流程（不需要 MT5、Ollama、Telegram）。"""
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from app import ai_analyst
 from app.alerts import Alerter
@@ -81,6 +81,44 @@ def test_alerts_sent_when_market_open(tmp_path, monkeypatch):
     runner.analysis_job()
     assert runner.market_open is True
     assert any(k.startswith("trend:") for k in sent)
+    db.close()
+
+
+def _report_runner(tmp_path, monkeypatch, source, **overrides):
+    settings = replace(_settings(tmp_path), **overrides)
+    db = Database(settings.db_path)
+    source.connect()
+    runner = Runner(settings, source, db)
+    delivered = []
+    monkeypatch.setattr(runner.alerter, "_deliver", lambda msg: delivered.append(msg) or True)
+    return runner, db, delivered
+
+
+def test_hourly_report_sent_once_when_market_open(tmp_path, monkeypatch):
+    runner, db, delivered = _report_runner(tmp_path, monkeypatch, DemoSource(history_days=120))
+    runner.analysis_job()  # 第一次分析后马上发一条研判
+    reports = [m for m in delivered if m.startswith("🕐")]
+    assert len(reports) == 1
+    assert "策略倾向" in reports[0] and "回测" in reports[0]
+    runner.analysis_job()  # 一小时内再分析，不会重复发
+    assert len([m for m in delivered if m.startswith("🕐")]) == 1
+    db.close()
+
+
+def test_report_does_not_use_event_alert_quota(tmp_path, monkeypatch):
+    runner, db, delivered = _report_runner(tmp_path, monkeypatch, DemoSource(history_days=120))
+    runner.analysis_job()
+    keys = [r[0] for r in db.conn.execute("SELECT key FROM alerts")]
+    assert any(k.startswith("report:") for k in keys)
+    events = [k for k in keys if not k.startswith("report:")]
+    assert db.alerts_count_since(datetime(2000, 1, 1, tzinfo=timezone.utc)) == len(events)
+    db.close()
+
+
+def test_no_report_when_market_closed(tmp_path, monkeypatch):
+    runner, db, delivered = _report_runner(tmp_path, monkeypatch, _ClosedMarketSource(history_days=120))
+    runner.analysis_job()
+    assert not [m for m in delivered if m.startswith("🕐")]
     db.close()
 
 

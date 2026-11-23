@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -116,10 +117,43 @@ class Runner:
     # ---------- 每 15 分钟：完整分析 ----------
     def analysis_job(self) -> dict | None:
         try:
-            return self._analyze()
+            facts = self._analyze()
         except Exception:  # noqa: BLE001
             log.exception("分析失败，下次再试")
             return None
+        try:
+            self.report_job()
+        except Exception:  # noqa: BLE001
+            log.exception("定时研判发送失败")
+        return facts
+
+    # ---------- 每小时：主动推送行情研判 ----------
+    def report_job(self, force: bool = False) -> bool:
+        """距离上一次研判满 REPORT_INTERVAL_MIN 分钟、且正在开盘，就推送一条。"""
+        interval = self.settings.report_interval_min
+        if (interval <= 0 and not force) or not self.last_facts:
+            return False
+        if not self.market_open and not force:
+            return False
+        now = datetime.now(timezone.utc)
+        row = self.db.conn.execute(
+            "SELECT MAX(time) FROM alerts WHERE key LIKE 'report:%' AND delivered=1"
+        ).fetchone()
+        if row and row[0] and not force:
+            last = datetime.fromisoformat(row[0])
+            if (now - last).total_seconds() < interval * 60 - 90:  # 留 90 秒余量，配合每 15 分钟的分析节奏
+                return False
+        analysis = self.db.latest_analysis()
+        text = messages.report_message(
+            self.last_facts,
+            analysis["ai_text"] if analysis else None,
+            analysis["ai_source"] if analysis else None,
+            now.strftime("%Y-%m-%d %H:%M"),
+        )
+        sent = self.alerter.send(f"report:{now:%Y%m%d%H%M}", text, scheduled=True)
+        if sent:
+            log.info("已推送定时行情研判")
+        return sent
 
     def _analyze(self) -> dict:
         s = self.settings
@@ -190,17 +224,31 @@ class Runner:
 def main() -> None:
     parser = argparse.ArgumentParser(description="XAU/USD 自动分析")
     parser.add_argument("--once", action="store_true", help="只分析一次")
+    parser.add_argument("--report-now", action="store_true", help="分析一次并立刻推送行情研判（不管上次什么时候发）")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     settings = get_settings()
     source = build_source(settings)
-    source.connect()
+    # 开机时 MT5 可能还没启动好：连不上就每 30 秒重试，直到连上（--once 只试一轮）
+    while True:
+        try:
+            source.connect()
+            break
+        except (ConnectionError, RuntimeError) as exc:
+            if args.once or args.report_now:
+                raise
+            log.warning("暂时连不上数据源（%s），30 秒后重试", exc)
+            time.sleep(30)
     db = Database(settings.db_path)
     runner = Runner(settings, source, db)
 
     facts = runner.analysis_job()
+    if args.report_now:
+        print("研判已推送" if runner.report_job(force=True) else "研判没有发出（看上面的日志）")
+        source.close()
+        return
     if args.once:
         if facts:
             print(db.latest_analysis()["ai_text"])

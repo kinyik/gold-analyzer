@@ -149,8 +149,9 @@ class Database:
         return row is not None
 
     def alerts_count_since(self, since: datetime) -> int:
+        """事件提醒的数量（定时研判 report: 不算）。"""
         return self.conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE time>=?", (_iso(since),)
+            "SELECT COUNT(*) FROM alerts WHERE time>=? AND key NOT LIKE 'report:%'", (_iso(since),)
         ).fetchone()[0]
 
     def record_alert(self, key: str, text: str, delivered: bool) -> None:

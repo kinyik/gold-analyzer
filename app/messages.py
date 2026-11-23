@@ -124,6 +124,22 @@ def compose(header: str, facts: dict, comment: str | None = None) -> str:
     return "\n\n".join(parts)
 
 
+def _ai_view(ai_text: str | None) -> str | None:
+    """从 AI 解读里取【局面】那一段，放进定时研判。"""
+    if not ai_text or "【局面】" not in ai_text:
+        return None
+    part = ai_text.split("【局面】", 1)[1].split("【", 1)[0].strip()
+    return part[:300] or None
+
+
+def report_message(facts: dict, ai_text: str | None, ai_source: str | None, when_utc: str) -> str:
+    """定时主动推送的行情研判。"""
+    header = f"🕐 XAU/USD 行情研判（{when_utc} UTC，每小时自动推送）"
+    view = _ai_view(ai_text) if ai_source == "ollama" else None
+    comment = f"本地 AI 解读：{view}" if view else None
+    return compose(header, facts, comment)
+
+
 def signal_message(facts: dict) -> str:
     sig = facts["signal"]
     return compose(f"🔔 XAU/USD 新信号：{DIR_WORD[sig['direction']]}", facts)

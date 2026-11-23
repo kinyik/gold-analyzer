@@ -47,6 +47,8 @@ flowchart LR
 
   ![Trading plan example (in Chinese): sell zone, trigger, stop, target, reasoning, invalidation](docs/screenshots/plan.png)
 - **AI summary** in Chinese every 15 minutes, generated locally with no internet and no cost
+- **Hourly market view**: while the market is open, pushed every hour: AI summary, trend per timeframe, key
+  levels, the strategy's lean (buy / sell / wait) and the zones it is waiting for
 - **Telegram alerts** for new signals, price entering a plan zone, trend changes and RSI extremes. Each alert
   includes a market snapshot, key levels, the strategy's rule-based lean and its backtest record. The same alert
   is not repeated within an hour, there is a daily cap, and alerts pause automatically while the market is closed
@@ -107,6 +109,11 @@ Python · MetaTrader5 · pandas · SQLite · Ollama (Qwen 2.5) · Streamlit · P
 .venv\Scripts\python.exe -m app.backtest --walkforward    # backtest + out-of-sample test
 .venv\Scripts\python.exe -m pytest                        # run tests
 ```
+
+Start at logon: put a shortcut to `autostart.bat` in the Startup folder (`Win + R` → `shell:startup`). It starts
+MT5, waits 60 seconds, then starts the analyzer and dashboard minimized (skipping any already running); the
+analyzer retries every 30 seconds until MT5 is ready. While the market is open it pushes an hourly market view to
+Telegram (`REPORT_INTERVAL_MIN` in `.env`).
 
 Note: the analysis text and alerts are in Chinese.
 

@@ -64,6 +64,8 @@ class Settings:
     tick_interval_sec: int = field(default_factory=lambda: _int("TICK_INTERVAL_SEC", 5))
     round_level_step: float = field(default_factory=lambda: _float("ROUND_LEVEL_STEP", 50))
     alert_cooldown_min: int = field(default_factory=lambda: _int("ALERT_COOLDOWN_MIN", 60))
+    # 定时主动推送行情研判：每隔多少分钟一次（0 = 关闭）。只在开盘时发
+    report_interval_min: int = field(default_factory=lambda: _int("REPORT_INTERVAL_MIN", 60))
     # 最新报价超过这么多分钟没更新，就当作休市（周末、节假日），不发提醒
     market_stale_min: int = field(default_factory=lambda: _int("MARKET_STALE_MIN", 10))
     max_alerts_per_day: int = field(default_factory=lambda: _int("MAX_ALERTS_PER_DAY", 20))

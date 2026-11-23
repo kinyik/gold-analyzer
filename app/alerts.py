@@ -20,13 +20,14 @@ class Alerter:
         self.settings = settings
         self.db = db
 
-    def send(self, key: str, text: str) -> bool:
-        """返回 True 表示这次真的发出（或打印）了。"""
+    def send(self, key: str, text: str, scheduled: bool = False) -> bool:
+        """返回 True 表示这次真的发出（或打印）了。
+        scheduled=True 是定时研判：不受「每天上限」限制，也不占用事件提醒的名额。"""
         now = datetime.now(timezone.utc)
         if self.db.alert_sent_since(key, now - timedelta(minutes=self.settings.alert_cooldown_min)):
             return False
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if self.db.alerts_count_since(day_start) >= self.settings.max_alerts_per_day:
+        if not scheduled and self.db.alerts_count_since(day_start) >= self.settings.max_alerts_per_day:
             log.info("今天的提醒已达上限 %d 条，跳过：%s", self.settings.max_alerts_per_day, key)
             return False
 

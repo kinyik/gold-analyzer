@@ -43,6 +43,7 @@ flowchart LR
 
   ![交易计划示例](docs/screenshots/plan.png)
 - **AI 中文解读**：每 15 分钟一次，本地运行、不联网、不收费
+- **每小时行情研判**：开盘期间每小时主动推送一次：AI 解读、各周期趋势、关键位、策略倾向（偏买 / 偏卖 / 观望）和等待的价位
 - **Telegram 提醒**：新信号、进入计划区、趋势转向、RSI 超买超卖；附带行情、关键位、策略倾向和回测成绩；
   同一提醒 1 小时内不重复、每天有上限、休市时自动暂停
 
@@ -94,8 +95,9 @@ Python · MetaTrader5 · pandas · SQLite · Ollama（Qwen 2.5）· Streamlit ·
 .venv\Scripts\python.exe -m pytest                        # 跑测试
 ```
 
-开机自动启动：「任务计划程序」→「创建基本任务」→ 触发器「当前用户登录时」→
-「启动程序」填 `start.bat` 的完整路径、「起始于」填本文件夹。MT5 也要设成开机启动。
+开机自动启动：在「启动」文件夹（按 `Win + R` 输入 `shell:startup`）放一个指向 `autostart.bat` 的快捷方式。
+它会先打开 MT5、等 60 秒，再把分析程序和仪表板以最小化窗口启动（已在运行就跳过）；
+分析程序连不上 MT5 时会每 30 秒重试。开盘期间每小时会自动推送一次行情研判到 Telegram（`.env` 的 `REPORT_INTERVAL_MIN`）。
 
 ## 文件结构
 
