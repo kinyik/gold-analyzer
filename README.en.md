@@ -7,8 +7,9 @@ builds a trading plan from a rule set **backtested on 8.5 years of data**, write
 summary with a **local open-source LLM**, and pushes alerts to Telegram.
 Everything is free and open source and runs on your own PC. It uses no paid APIs.
 
-<!-- Screenshot and demo video: put them in docs/screenshots/ and uncomment
-![Dashboard](docs/screenshots/dashboard.png)
+![Dashboard: live price, multi-timeframe trend, candles with key levels, local AI summary](docs/screenshots/dashboard.png)
+
+<!-- Demo video: uncomment after uploading
 🎬 Demo video: https://your-video-link
 -->
 
@@ -43,6 +44,8 @@ flowchart LR
   H1 EMA200 are merged into zones and scored by how many sources overlap
 - **Trading plan**: even without a signal, it lists the buy and sell zones to watch, with the trigger, stop,
   target, reasoning and invalidation condition for each
+
+  ![Trading plan example (in Chinese): sell zone, trigger, stop, target, reasoning, invalidation](docs/screenshots/plan.png)
 - **AI summary** in Chinese every 15 minutes, generated locally with no internet and no cost
 - **Telegram alerts** for new signals, price entering a plan zone, trend changes and RSI extremes. Each alert
   includes a market snapshot, key levels, the strategy's rule-based lean and its backtest record. The same alert

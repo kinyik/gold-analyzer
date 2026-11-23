@@ -24,6 +24,9 @@ def get_db() -> Database:
 
 
 def chart(df: pd.DataFrame, zones: dict, plan: list, tf: str) -> go.Figure:
+    df = df.copy()
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert(None)  # 统一用不带时区的 UTC 时间画图
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
@@ -36,20 +39,39 @@ def chart(df: pd.DataFrame, zones: dict, plan: list, tf: str) -> go.Figure:
         for z in zones.get(key, []):
             if not lo - (hi - lo) * 0.2 <= z["price"] <= hi + (hi - lo) * 0.2:
                 continue
-            fig.add_hline(y=z["price"], line=dict(color=color, dash="dot", width=1 + 0.5 * z["score"]),
-                          annotation_text=f"{word} {z['price']:.2f}（强度{z['score']}）",
-                          annotation_position="right")
+            label = {}
+            in_plan = next((p for p in plan if p["zone_low"] <= z["price"] <= p["zone_high"]), None)
+            name = word
+            if in_plan:
+                name = "做多计划区" if in_plan["direction"] == "多" else "做空计划区"
+            if z["score"] >= 2 or in_plan:  # 只给较强的关键位加文字，免得挤在一起
+                label = dict(annotation_text=f"{name} {z['price']:.2f}（强度{z['score']}）",
+                             annotation_position="top left", annotation_font=dict(size=11, color=color))
+            fig.add_hline(y=z["price"], line=dict(color=color, dash="dot", width=0.8 + 0.5 * z["score"]), **label)
     for p in plan:
         color = "rgba(38,166,154,0.18)" if p["direction"] == "多" else "rgba(239,83,80,0.18)"
-        fig.add_hrect(y0=p["zone_low"], y1=p["zone_high"], fillcolor=color, line_width=0,
-                      annotation_text="做多计划区" if p["direction"] == "多" else "做空计划区",
-                      annotation_position="left")
+        fig.add_hrect(y0=p["zone_low"], y1=p["zone_high"], fillcolor=color, line_width=0)
     fig.update_layout(
         template="plotly_dark", height=560, margin=dict(l=10, r=10, t=30, b=10),
         xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.04),
-        title=f"XAU/USD {tf}",
+        title=f"XAU/USD {tf}（时间为 UTC）",
     )
+    fig.update_xaxes(rangebreaks=_market_gaps(df.index))
     return fig
+
+
+def _market_gaps(index: pd.DatetimeIndex) -> list[dict]:
+    """把休市时间（周末、节假日）从时间轴上拿掉，K 线才不会断开、均线不会画成平线。"""
+    if len(index) < 3:
+        return []
+    step = pd.Series(index).diff().median()
+    if step >= pd.Timedelta(days=1):  # 日线的周末空档很小，不处理
+        return []
+    full = pd.date_range(index[0], index[-1], freq=step)
+    missing = full.difference(index)
+    if len(missing) == 0:
+        return []
+    return [dict(values=[t.to_pydatetime() for t in missing], dvalue=step.total_seconds() * 1000)]
 
 
 tf = st.sidebar.radio("K 线周期", TIMEFRAMES, index=1)

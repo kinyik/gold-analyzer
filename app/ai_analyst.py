@@ -20,7 +20,8 @@ log = logging.getLogger(__name__)
 PROMPT = """你是一名黄金（XAU/USD）技术分析助理。下面是程序已经算好的数据（JSON）。
 规则：
 1. 只能使用下面数据里出现的数字，不准自己编任何价格或指标数值。
-   描述各周期 RSI 和 MACD 时，直接照抄该周期的「rsi状态」「macd状态」，不要自己比较大小。
+   描述各周期的趋势、RSI、MACD 时，只照抄「各周期状态」里的句子，不要自己比较大小，
+   也不要把不同周期说成一样（例如某个周期是震荡，就不能说所有周期都是空头）。
 2. 用简体中文，严格按以下五个标题输出，每项 1–3 句：
 【局面】
 【理由】
@@ -154,26 +155,52 @@ def _for_ai(facts: dict) -> dict:
         hist = ind.get("macd_hist")
         if hist is not None:
             ind["macd状态"] = "多头动能" if hist > 0 else "空头动能"
+    # 各周期状态也直接写成句子，小模型照抄就不会把周期弄混
+    names = {"M15": "15分钟", "H1": "1小时", "H4": "4小时", "D1": "日线"}
+    out["各周期状态"] = [
+        f"{names.get(tf, tf)}：趋势{out['trends'].get(tf, '-')}，RSI {ind.get('rsi14')}（{ind.get('rsi状态', '-')}），"
+        f"MACD {ind.get('macd状态', '-')}"
+        for tf, ind in out.get("indicators", {}).items()
+    ]
     return out
+
+
+def _generate(prompt: str, settings: Settings, cpu_only: bool) -> str:
+    options = {"temperature": 0.2}
+    if cpu_only:
+        options["num_gpu"] = 0  # 不用显卡，全部放 CPU
+    resp = requests.post(
+        f"{settings.ollama_url.rstrip('/')}/api/generate",
+        json={
+            "model": settings.ollama_model,
+            "prompt": prompt,
+            "stream": False,
+            "keep_alive": "30m",  # 两次分析之间模型留在内存里，不用每次重新加载
+            "options": options,
+        },
+        timeout=settings.ollama_timeout_sec,
+    )
+    resp.raise_for_status()
+    return resp.json().get("response", "").strip()
+
+
+def _is_gpu_oom(exc: Exception) -> bool:
+    return (isinstance(exc, requests.HTTPError) and exc.response is not None
+            and "out of memory" in exc.response.text.lower())
 
 
 def analyze(facts: dict, settings: Settings) -> tuple[str, str]:
     """返回 (分析文字, 来源 'ollama' 或 'template')。"""
     prompt = PROMPT.format(facts=json.dumps(_for_ai(facts), ensure_ascii=False, indent=1))
     try:
-        resp = requests.post(
-            f"{settings.ollama_url.rstrip('/')}/api/generate",
-            json={
-                "model": settings.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "keep_alive": "30m",  # 两次分析之间模型留在显卡里，不用每次重新加载
-                "options": {"temperature": 0.2},
-            },
-            timeout=settings.ollama_timeout_sec,
-        )
-        resp.raise_for_status()
-        text = resp.json().get("response", "").strip()
+        try:
+            text = _generate(prompt, settings, cpu_only=False)
+        except requests.HTTPError as exc:
+            if not _is_gpu_oom(exc):
+                raise
+            # 显卡被其他程序占满（游戏、浏览器等）时，改用 CPU 跑，慢一点但能用
+            log.info("显卡显存不够，改用 CPU 跑 AI（会慢一些）")
+            text = _generate(prompt, settings, cpu_only=True)
     except (requests.RequestException, ValueError) as exc:
         detail = exc.__class__.__name__
         if isinstance(exc, requests.HTTPError) and exc.response is not None:
