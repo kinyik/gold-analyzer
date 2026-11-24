@@ -25,6 +25,16 @@ from app.levels import split_zones, swing_points
 
 log = logging.getLogger("runner")
 PARAMS = strategy.StrategyParams()
+TF_LENGTH = {"M15": pd.Timedelta(minutes=15), "H1": pd.Timedelta(hours=1),
+             "H4": pd.Timedelta(hours=4), "D1": pd.Timedelta(days=1)}
+
+
+def closed_bars(df: pd.DataFrame, tf: str, now: datetime) -> pd.DataFrame:
+    """只留已收盘的 K 线。最后一根的时段还没结束才去掉；
+    休市时最后一根其实已经收盘，不能一律丢掉，否则会拿一小时前的数据来分析。"""
+    if len(df) and df.index[-1] + TF_LENGTH[tf] > pd.Timestamp(now):
+        return df.iloc[:-1]
+    return df
 
 
 class _LockedSource:
@@ -143,9 +153,16 @@ class Runner:
             last = datetime.fromisoformat(row[0])
             if (now - last).total_seconds() < interval * 60 - 90:  # 留 90 秒余量，配合每 15 分钟的分析节奏
                 return False
+        facts = self.last_facts
+        try:
+            tick = self.source.get_tick()
+            if (now - tick.time).total_seconds() <= self.settings.market_stale_min * 60:
+                facts = {**facts, "price": round(tick.mid, 2), "bid": tick.bid, "ask": tick.ask}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("研判取最新报价失败，用分析时的价格：%s", exc)
         analysis = self.db.latest_analysis()
         text = messages.report_message(
-            self.last_facts,
+            facts,
             analysis["ai_text"] if analysis else None,
             analysis["ai_source"] if analysis else None,
             now.strftime("%Y-%m-%d %H:%M"),
@@ -163,10 +180,11 @@ class Runner:
 
         closed: dict[str, pd.DataFrame] = {}
         day_open = None
+        now = datetime.now(timezone.utc)
         for tf in TIMEFRAMES:
             raw = self.source.get_rates(tf, s.bars_per_timeframe)
             self.db.save_candles(tf, raw, keep=s.bars_per_timeframe)
-            closed[tf] = add_indicators(raw).iloc[:-1]  # 最后一根还没收完，不用
+            closed[tf] = closed_bars(add_indicators(raw), tf, now)
             if tf == "D1":
                 day_open = float(raw["open"].iloc[-1])
         trends = {tf: classify_trend(closed[tf]) for tf in TIMEFRAMES}

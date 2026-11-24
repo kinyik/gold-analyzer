@@ -109,8 +109,16 @@ class MT5Source(DataSource):
 
     # ---------- 时区 ----------
     def _update_offset(self, tick) -> None:
-        """用最新报价时间推算服务器时区（只在报价是「刚刚」的时候才可靠，周末休市时不更新）。"""
+        """用最新报价时间推算服务器时区（只在报价是「刚刚」的时候才可靠，周末休市时不更新）。
+
+        时区一旦判断出来，只有报价时间「有在往前走」（市场真的在报价）时才允许改。
+        否则每日休市那两小时里，停住的旧报价刚好差整数小时，会被误判成时区变了，
+        让程序以为报价是新的、在休市时照发提醒。
+        """
         if self._fixed_offset or tick is None:
+            return
+        last_seen, self._last_tick_server_time = getattr(self, "_last_tick_server_time", None), tick.time
+        if self._offset_known and (last_seen is None or tick.time <= last_seen):
             return
         diff = tick.time - time.time()
         hours = round(diff / 3600)
