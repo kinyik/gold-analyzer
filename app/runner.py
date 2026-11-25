@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from app import ai_analyst, messages, strategy
+from app import ai_analyst, data_quality, messages, strategy
 from app.alerts import Alerter
 from app.config import TIMEFRAMES, Settings, get_settings
 from app.data_sources import DataSource, build_source
@@ -92,6 +92,7 @@ class Runner:
         self.h1_atr: float | None = None
         self.market_open: bool | None = None
         self.last_facts: dict | None = None
+        self._reported_bad: set = set()
 
     def _check_market(self, tick_time: datetime) -> bool:
         """报价太久没更新 = 休市。状态改变时记一笔日志。"""
@@ -181,8 +182,10 @@ class Runner:
         closed: dict[str, pd.DataFrame] = {}
         day_open = None
         now = datetime.now(timezone.utc)
+        m1_clean, bad = self._bad_prints()
         for tf in TIMEFRAMES:
-            raw = self.source.get_rates(tf, s.bars_per_timeframe)
+            raw = data_quality.repair_bars(self.source.get_rates(tf, s.bars_per_timeframe),
+                                           TF_LENGTH[tf], m1_clean, bad)
             self.db.save_candles(tf, raw, keep=s.bars_per_timeframe)
             closed[tf] = closed_bars(add_indicators(raw), tf, now)
             if tf == "D1":
@@ -222,6 +225,22 @@ class Runner:
             self._alerts_after_analysis(facts, result)
         self.prev_trends = trends
         return facts
+
+    def _bad_prints(self) -> tuple[pd.DataFrame, list]:
+        """用最近约一周的 1 分钟 K 线找经纪商异常报价（每日开盘那一分钟最常见）。"""
+        try:
+            m1 = self.source.get_rates("M1", 10_000)
+        except Exception as exc:  # noqa: BLE001 - 拿不到 1 分钟数据就照原样分析
+            log.debug("没有 1 分钟数据，跳过异常报价过滤：%s", exc)
+            return pd.DataFrame(), []
+        m1_clean, bad = data_quality.clean_minutes(m1)
+        new = {b.time for b in bad} - self._reported_bad
+        if new:
+            for b in bad:
+                if b.time in new:
+                    log.info("忽略异常报价 %s %s=%.2f（改为 %.2f）", b.time, b.field, b.price, b.replaced_by)
+            self._reported_bad |= new
+        return m1_clean, bad
 
     def _alerts_after_analysis(self, facts: dict, result: strategy.StrategyResult) -> None:
         price = facts["price"]

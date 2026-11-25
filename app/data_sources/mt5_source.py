@@ -22,6 +22,7 @@ except ImportError:  # 非 Windows 或没装包
 log = logging.getLogger(__name__)
 
 _TIMEFRAME_ATTR = {
+    "M1": "TIMEFRAME_M1",
     "M15": "TIMEFRAME_M15",
     "H1": "TIMEFRAME_H1",
     "H4": "TIMEFRAME_H4",
