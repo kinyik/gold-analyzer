@@ -115,6 +115,15 @@ MT5, waits 60 seconds, then starts the analyzer and dashboard minimized (skippin
 analyzer retries every 30 seconds until MT5 is ready. While the market is open it pushes an hourly market view to
 Telegram (`REPORT_INTERVAL_MIN` in `.env`).
 
+Watchdog: Task Scheduler runs `watchdog.vbs` (→ `watchdog.ps1`) every 5 minutes. If the analyzer has stopped, it
+restarts it; if there has been no heartbeat (`data/heartbeat.txt`) for 15 minutes, it treats the analyzer as stuck
+and restarts it; it also starts the dashboard and MT5 if they are not running. Actions go to `data/watchdog.log`;
+the analyzer logs to `data/runner.log`. To pause the watchdog, create an empty file `data/pause_watchdog`.
+
+```
+schtasks /Create /TN "Gold Analyzer Watchdog" /SC MINUTE /MO 5 /TR "wscript.exe \"<project path>\watchdog.vbs\"" /F
+```
+
 Note: the analysis text and alerts are in Chinese.
 
 ## Project structure
@@ -127,12 +136,14 @@ app/
   levels.py              confluence zones
   strategy.py            strategy rules, trading plan, signals
   backtest.py            backtest and in-sample / out-of-sample test
+  data_quality.py        filters broker bad prints (fake prices in the first minute after the reopen)
   ai_analyst.py          local Ollama summary + made-up-number checks + template fallback
   messages.py            Telegram alert text
   alerts.py              Telegram delivery, de-duplication, daily cap
   db.py                  SQLite
   runner.py              main loop: fetch → compute → plan → summarise → alert
 dashboard.py             Streamlit dashboard
+autostart.bat            start at logon; watchdog.ps1 / watchdog.vbs keep it running
 STRATEGY.md              strategy rules and backtest results (Chinese)
 tests/                   pytest tests
 ```

@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
+import logging.handlers
 import threading
 import time
 from datetime import datetime, timezone
@@ -35,6 +37,30 @@ def closed_bars(df: pd.DataFrame, tf: str, now: datetime) -> pd.DataFrame:
     if len(df) and df.index[-1] + TF_LENGTH[tf] > pd.Timestamp(now):
         return df.iloc[:-1]
     return df
+
+
+def write_heartbeat(settings: Settings) -> None:
+    """看门狗（watchdog.ps1）靠这个文件判断程序是不是还活着、有没有卡住。"""
+    try:
+        (settings.db_path.parent / "heartbeat.txt").write_text(
+            datetime.now(timezone.utc).isoformat(timespec="seconds"), encoding="utf-8")
+    except OSError as exc:
+        log.warning("写心跳文件失败：%s", exc)
+
+
+def _setup_logging(settings: Settings) -> None:
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    # 写到 data/runner.log，程序停了也查得到原因（最多 5 个 x 2MB）
+    file = logging.handlers.RotatingFileHandler(
+        settings.db_path.parent / "runner.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    file.setFormatter(fmt)
+    root.addHandler(file)
 
 
 class _LockedSource:
@@ -108,6 +134,7 @@ class Runner:
 
     # ---------- 每几秒：报价 + 计划区提醒 ----------
     def tick_job(self) -> None:
+        write_heartbeat(self.settings)
         try:
             tick = self.source.get_tick()
         except Exception as exc:  # noqa: BLE001 - 保持程序不中断
@@ -264,12 +291,14 @@ def main() -> None:
     parser.add_argument("--report-now", action="store_true", help="分析一次并立刻推送行情研判（不管上次什么时候发）")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     settings = get_settings()
+    _setup_logging(settings)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    log.info("分析程序启动（PID %d）", os.getpid())
     source = build_source(settings)
     # 开机时 MT5 可能还没启动好：连不上就每 30 秒重试，直到连上（--once 只试一轮）
     while True:
+        write_heartbeat(settings)
         try:
             source.connect()
             break
@@ -281,6 +310,7 @@ def main() -> None:
     db = Database(settings.db_path)
     runner = Runner(settings, source, db)
 
+    write_heartbeat(settings)
     facts = runner.analysis_job()
     if args.report_now:
         print("研判已推送" if runner.report_job(force=True) else "研判没有发出（看上面的日志）")
@@ -302,7 +332,10 @@ def main() -> None:
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
-        pass
+        log.info("收到结束指令，程序退出")
+    except Exception:
+        log.exception("程序意外退出")
+        raise
     finally:
         source.close()
         db.close()

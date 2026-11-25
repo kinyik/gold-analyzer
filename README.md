@@ -99,6 +99,14 @@ Python · MetaTrader5 · pandas · SQLite · Ollama（Qwen 2.5）· Streamlit ·
 它会先打开 MT5、等 60 秒，再把分析程序和仪表板以最小化窗口启动（已在运行就跳过）；
 分析程序连不上 MT5 时会每 30 秒重试。开盘期间每小时会自动推送一次行情研判到 Telegram（`.env` 的 `REPORT_INTERVAL_MIN`）。
 
+看门狗：用「任务计划程序」每 5 分钟跑一次 `watchdog.vbs`（→ `watchdog.ps1`）。分析程序停了就重启，
+15 分钟没有心跳（`data/heartbeat.txt`）就当卡住、强制重启；仪表板和 MT5 没开也会打开。
+动作记在 `data/watchdog.log`，分析程序日志在 `data/runner.log`。想暂时关掉看门狗，在 `data/` 里建一个空文件 `pause_watchdog`。
+
+```
+schtasks /Create /TN "Gold Analyzer Watchdog" /SC MINUTE /MO 5 /TR "wscript.exe \"<项目路径>\watchdog.vbs\"" /F
+```
+
 ## 文件结构
 
 ```
@@ -109,12 +117,14 @@ app/
   levels.py              关键位共振
   strategy.py            策略规则、交易计划、信号
   backtest.py            历史回测、样本内 / 样本外检验
+  data_quality.py        过滤经纪商异常报价（开盘那一分钟的假价格）
   ai_analyst.py          本地 Ollama 解读 + 防编造检查 + 文字模板备用
   messages.py            Telegram 提醒内容
   alerts.py              Telegram 推送、去重、每日上限
   db.py                  SQLite
   runner.py              主程序：定时拿行情 → 算 → 计划 → 解读 → 提醒
 dashboard.py             Streamlit 仪表板
+autostart.bat            开机启动；watchdog.ps1 / watchdog.vbs 看门狗
 STRATEGY.md              交易规则和回测结果
 tests/                   pytest 测试
 ```
